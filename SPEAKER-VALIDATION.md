@@ -37,6 +37,18 @@ strap, supply voltage, speaker impedance and power/excursion ratings, and
 measurement of the differential audio output and shutdown transitions.
 [Analog Devices data sheet](https://www.analog.com/media/en/technical-documentation/data-sheets/MAX98357A-MAX98357B.pdf)
 
+ASUS lists 2 W stereo speakers for the CX1500CNA. The product specification
+does not give the fitted assembly's impedance, continuous rating or excursion
+limits. [ASUS product specifications](https://www.asus.com/event/brochure/ASUSBusinessProductGuide.pdf)
+
+For a full-scale 1 kHz sine, the quantized IIR's calculated gain is
+−27.79 dB. Applying the data sheet's 2.1 dBV reference and 15.6 dB maximum
+gain for the highest strap setting gives −10.09 dBV, about 0.31 V RMS
+in the linear amplifier model. That would be about 25 mW into a 4 Ω
+resistor or 12 mW into an 8 Ω resistor. These loads are examples.
+This gives a bench reference for the steady-state tone. The actual
+amplifier output during boot, start, stop and resume still needs measurement.
+
 The user has no oscilloscope, audio analyzer or dummy speaker load available.
 There have been no speaker playback tests or output measurements. The shipped
 machine-driver source blocks the speaker backend during stream startup.
