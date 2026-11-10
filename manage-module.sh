@@ -10,8 +10,32 @@ module_root=/usr/lib/modules/$krel
 override=$module_root/updates/babytiger/$filename
 image=/boot/initramfs-$krel.img
 alias_name=platform:bxt_da7219_mx98357a
+repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+modprobe_lock=/etc/modprobe.d/00-babytiger-speaker-lock.conf
+dracut_lock=/etc/dracut.conf.d/90-babytiger-speaker-lock.conf
 
 die() { printf '%s\n' "$*" >&2; exit 1; }
+
+# Keep these files across module rollback and failed initramfs builds.
+check_lock_file() {
+    local source=$1 destination=$2
+    if [[ -e $destination || -L $destination ]]; then
+        [[ -f $destination && ! -L $destination ]] && cmp -s -- "$source" "$destination" ||
+            die "Unexpected existing configuration at $destination."
+    fi
+}
+
+install_lock_file() {
+    local source=$1 destination=$2 temporary
+    [[ ! -f $destination ]] || return 0
+    [[ -d ${destination%/*} ]] || install -d -m 0755 -- "${destination%/*}"
+    temporary=$(mktemp -- "${destination%/*}/.babytiger-speaker-lock.XXXXXX")
+    if ! install -m 0644 -- "$source" "$temporary" || ! mv -T -- "$temporary" "$destination"; then
+        rm -f -- "$temporary"
+        die "Could not install $destination."
+    fi
+    restorecon "$destination"
+}
 
 case "${1:-}" in
     install) [[ $# == 2 ]] || die 'Usage: install.sh PATH_TO_MODULE' ;;
@@ -41,7 +65,7 @@ if [[ $action == install ]]; then
         ( $product == Babytiger || $board == Babytiger ||
           ( $board == Coral && ( $sku == sku30 || $sku == sku33 ) ) ) ]] ||
         die 'BABYTIGER DMI check failed.'
-    python3 "$(dirname -- "$0")/inspect-nhlt.py"
+    python3 "$repo/inspect-nhlt.py"
     [[ -e /sys/bus/acpi/devices/DLGS7219:00 && -e /sys/bus/acpi/devices/MX98357A:00 ]] ||
         die 'Expected DA7219 and MAX98357A ACPI devices.'
     module=$(realpath -e -- "$2")
@@ -50,8 +74,8 @@ if [[ $action == install ]]; then
     [[ $(modinfo -F vermagic "$module") == "$krel "* ]] || die 'Module vermagic mismatch.'
     modinfo -F alias "$module" | grep -Fx "$alias_name" >/dev/null ||
         die 'The module is missing the Apollo Lake platform alias.'
-    [[ $(modinfo -F babytiger_speaker_lock "$module") == 1 ]] ||
-        die 'Expected the BABYTIGER speaker-locked port.'
+    [[ $(modinfo -F babytiger_speaker_lock "$module") == 2 ]] ||
+        die 'Expected the current BABYTIGER port with the amplifier disconnected.'
     if [[ -d /sys/firmware/efi ]]; then
         sb_state=$(LC_ALL=C mokutil --sb-state)
         if [[ $sb_state == *'SecureBoot enabled'* && -z $(modinfo -F signer "$module") ]]; then
@@ -60,7 +84,12 @@ if [[ $action == install ]]; then
     fi
     selected=$(modinfo -k "$krel" -F filename "$name")
     [[ $selected == */modules/"$krel"/kernel/* && ! -e "$override" && ! -L "$override" ]] ||
-        die 'Expected the stock module to be selected with no existing override.'
+        die 'Expected the stock module to be selected. Roll back any earlier override before installing.'
+
+    check_lock_file "$repo/speaker-lock/modprobe.conf" "$modprobe_lock"
+    check_lock_file "$repo/speaker-lock/dracut.conf" "$dracut_lock"
+    install_lock_file "$repo/speaker-lock/modprobe.conf" "$modprobe_lock"
+    install_lock_file "$repo/speaker-lock/dracut.conf" "$dracut_lock"
 else
     if [[ ! -e "$override" && ! -L "$override" ]]; then
         printf 'No BABYTIGER module override is installed.\n'
@@ -121,6 +150,14 @@ else
 fi
 
 dracut "$stage/initramfs.img" "$krel"
+if [[ -f $dracut_lock ]]; then
+    lsinitrd -f "$modprobe_lock" "$stage/initramfs.img" | cmp -s -- "$modprobe_lock" - ||
+        die 'The rebuilt initramfs is missing the speaker lock.'
+    lsinitrd "$stage/initramfs.img" > "$stage/contents"
+    if grep -Eq '/snd[-_]soc[-_](avs[-_])?max98357a\.ko(\.[[:alnum:]]+)?([[:space:]]|$)' "$stage/contents"; then
+        die 'The rebuilt initramfs still contains a MAX98357A driver.'
+    fi
+fi
 if selinuxenabled; then
     chcon --reference="$image" "$stage/initramfs.img"
 fi
@@ -130,6 +167,7 @@ changed=0
 
 printf 'Selected module for the next boot: %s\n' "$selected"
 if [[ $action == install ]]; then
+    printf '%s\n' 'Speaker lock installed for all kernels and included in the rebuilt target initramfs.'
     printf '%s\n' 'For the SOF test boot, set snd_intel_dspcfg.dsp_driver=3 in the temporary GRUB editor.'
     printf '%s\n' 'Replace any existing snd_intel_dspcfg.dsp_driver argument in that boot entry.'
 fi

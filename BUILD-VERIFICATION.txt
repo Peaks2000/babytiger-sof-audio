@@ -37,12 +37,12 @@ Build
   modinfo name: snd_soc_sof_da7219
   modinfo vermagic: 7.3.3-300.fc45.x86_64 SMP preempt mod_unload
   modinfo new alias: platform:bxt_da7219_mx98357a
-  modinfo lock marker: babytiger_speaker_lock=1
+  modinfo lock marker: babytiger_speaker_lock=2
   modinfo namespace imports: SND_SOC_INTEL_SOF_BOARD_HELPERS,
     SND_SOC_INTEL_SOF_MAXIM_COMMON
   readelf: .BTF and .BTF.base present
   SHA-256 of this unsigned build (debug paths can vary):
-    80564e78050cdcd8bca7751f4c3bb26320fce6f16b144b0629a1505b4e88162b
+    855977e3928257286d6ba276d374b2227c56dc5f37356c4e6287235bb4b26b77
 
 Offline checks
   Patch applied cleanly to the Fedora baseline. The external source matched
@@ -54,10 +54,20 @@ Offline checks
   --show-depends resolved the BXT alias and its dependencies without loading
   anything. After removing the override and re-running depmod, modinfo again
   selected the stock .ko.xz.
-  Bash syntax checks passed for all scripts. A scratch fixture with mocked
-  Fedora, depmod and dracut verified wrong NHLT routes and checksum rejection,
-  install, duplicate install rejection, rollback, repeat rollback and
-  recovery when dracut fails. No real initramfs was changed or regenerated.
+  Bash syntax checks passed for all scripts. The installer fixture checked
+  NHLT route and checksum rejection, rejection of the old lock marker and
+  conflicting configuration, install, rollback and initramfs failure recovery.
+  It verified that rollback and a failed rebuild retain the guard files and
+  that the installer rejects a generated image that lacks the lock or contains
+  an amp module.
+  Actual dracut 108 and lsinitrd checks used scratch generic images in an
+  isolated user and mount namespace for Fedora 45 7.3.3-300 and Fedora 44
+  7.2.15-200. A fixture requested both MAX98357A modules and the DA7219 codec.
+  Control images contained all three. Guarded images contained DA7219 and
+  the exact modprobe lock file, and excluded both MAX98357A modules. These
+  images were never booted and no installed initramfs was changed.
+  A kmod dry run against the Fedora 45 stock modules with the lock in place
+  resolved explicit modprobe requests for both amp modules to /usr/bin/false.
   Fedora 45 alsa-sof-firmware-2026.09.2-1.fc45.noarch passed signature checks.
   Decompressed SHA-256 values for the firmware and the topology inspected:
     sof-apl.ri           d63499833bb20352e63907e2409f8246df278a15cf7c73a24aeefaff19fb1a43

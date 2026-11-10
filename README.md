@@ -2,7 +2,7 @@
 
 Experimental port. Live BABYTIGER routing matches the port. Physical speaker safety verification is pending.
 
-Target kernel **7.3.3-300.fc45.x86_64**, ASUS Chromebook CX1500CNA with MrChromebox Full ROM. This is an experimental headset and microphone port. **Keep the internal speakers disabled.** The patch preserves the topology’s SSP5 backend and binds the standard MAX98357A codec driver, but disables its speaker DAPM endpoint and rejects stream startup on that backend with `-EPERM`. There is no runtime enable switch.
+Target kernel **7.3.3-300.fc45.x86_64**, ASUS Chromebook CX1500CNA with MrChromebox Full ROM. This is an experimental headset and microphone port. **Keep the internal speakers disabled.** The patch gives SSP5 a dummy codec so the topology can bind without the physical MAX98357A. Stream startup on SSP5 returns `-EPERM`.
 
 ## Stock SOF topology patch
 
@@ -16,7 +16,9 @@ hardware limitations are documented there.
 Run `./install.sh --check` to check the target system and development files.
 Run `./install.sh` as your normal user to build, then install the module through
 sudo. The module keeps SSP5 playback blocked while speaker verification is
-pending. Use `./install.sh --rollback` to restore the packaged module.
+pending. The installer adds a persistent speaker lock for Fedora kernel
+updates. If you installed an earlier version, run `./install.sh --rollback`
+before installing this version.
 
 For the next verification step, transfer this directory to the Chromebook and
 run `sudo ./collect-diagnostics.sh` through its local terminal or RustDesk
@@ -62,7 +64,7 @@ For an in-tree build, apply `0001-asoc-intel-sof-da7219-babytiger.patch` with `g
 
 2. Keep the AVS speaker blacklist in place. To test SOF, use `snd_intel_dspcfg.dsp_driver=3` in a **one-time GRUB edit** for the target boot entry. Replace any existing `snd_intel_dspcfg.dsp_driver` argument in that entry. Fedora's kmod 34.2 appends the boot argument after any `options snd_intel_dspcfg dsp_driver=4` setting from modprobe.d, so the temporary boot uses SOF. The port expects the stock `sof-apl.ri` and `sof-apl-da7219.tplg` files and the installed UCM files. [Fedora kmod package](https://packages.fedoraproject.org/pkgs/kmod/kmod/fedora-45.html) · [kmod 34.2 configuration parser](https://github.com/kmod-project/kmod/blob/v34.2/libkmod/libkmod-config.c)
 3. With Secure Boot or module signature enforcement, sign the built module using the target development tree’s `scripts/sign-file` and a key trusted by the running kernel. For example, from this bundle directory run `/usr/lib/modules/7.3.3-300.fc45.x86_64/build/scripts/sign-file sha256 /path/to/private-key /path/to/certificate.der module/snd-soc-sof_da7219.ko`. Check that the certificate is enrolled and confirm the signer with `modinfo -F signer`. The module produced by `make` is unsigned.
-4. Install by hand from this bundle. The installer checks the release, board, live NHLT endpoint directions, ACPI device presence, and module metadata. It stages the override under `updates/babytiger`, runs `depmod`, and rebuilds the target’s standard Fedora initramfs via `dracut`. It preserves the packaged module and uses the existing Fedora boot entry. The script does not load or unload any modules or reboot.
+4. Install by hand from this bundle. The installer checks the release, board, live NHLT endpoint directions, ACPI device presence, and module metadata. It installs the speaker lock, stages the override under `updates/babytiger`, runs `depmod`, and rebuilds the target’s standard Fedora initramfs via `dracut`. Before replacing the image, it checks that the lock is present and that both MAX98357A modules are absent. The packaged module and Fedora boot entry stay in place. Reboot manually for the lock to apply from boot.
 
    ```sh
    sudo ./install.sh module/snd-soc-sof_da7219.ko
@@ -76,11 +78,36 @@ For an in-tree build, apply `0001-asoc-intel-sof-da7219-babytiger.patch` with `g
    cat /sys/module/snd_intel_dspcfg/parameters/dsp_driver
    journalctl -k -b | grep -Ei 'sof|da7219|NHLT|98357'
    ls -l /sys/bus/platform/devices/bxt_da7219_mx98357a*/driver
+   lsmod | grep -E '^(snd_soc_max98357a|snd_soc_avs_max98357a)\b'
    aplay -l
    arecord -l
    ```
 
-   Confirm that the SOF card lists Headset PCM 1 and DMIC PCM 99 before trying those devices. If desktop audio is missing, the previous AVS UCM profile may not match the new SOF card. Use `alsaucm listcards` and verify that any SOF profile maps headphones to device 1 and the internal mic to device 99. For a raw ALSA headset check, first verify the card number in `aplay -l`, set a low headset volume using the **headset** control, plug in headphones, then play a short, quiet recording using `aplay -D plughw:N,1 file.wav` with the actual card number in place of `N`. The topology can still list a Speakers PCM because it defines the frontend. It is intentionally unavailable for playback.
+   The `lsmod` filter should return no matches. Confirm that the SOF card lists Headset PCM 1 and DMIC PCM 99 before trying those devices. If desktop audio is missing, the previous AVS UCM profile may not match the new SOF card. Use `alsaucm listcards` and verify that any SOF profile maps headphones to device 1 and the internal mic to device 99. For a raw ALSA headset check, first verify the card number in `aplay -l`, set a low headset volume using the **headset** control, plug in headphones, then play a short, quiet recording using `aplay -D plughw:N,1 file.wav` with the actual card number in place of `N`. The topology can still list a Speakers PCM because it defines the frontend. It is intentionally unavailable for playback.
+
+## Kernel updates
+
+The installer writes `/etc/modprobe.d/00-babytiger-speaker-lock.conf` to block
+normal loading of both the MAX98357A codec and its AVS machine module. It writes
+`/etc/dracut.conf.d/90-babytiger-speaker-lock.conf` so standard Fedora initramfs
+builds also omit both modules and carry the modprobe rules. These files apply
+independently of the SOF patch and stay installed after module rollback or a
+failed rebuild. [Dracut configuration manual](https://dracut-ng.github.io/dracut/man/dracut.conf.5.html).
+
+The patched module remains specific to **7.3.3-300.fc45.x86_64**. On newer
+kernels use Fedora’s stock audio stack with the speaker lock. The experimental
+SOF headset and microphone path needs a new build and review before use on a
+different kernel.
+
+For any fallback initramfs built before installing the lock, rebuild that image
+with `sudo dracut --force --kver VERSION` using its installed kernel release.
+Check a new or rebuilt image with
+`sudo lsinitrd -f /etc/modprobe.d/00-babytiger-speaker-lock.conf /boot/initramfs-VERSION.img`
+and check the full image listing for both MAX98357A modules. The file should
+contain both block rules and the image should contain neither module. A future
+kernel that builds an amp driver in or changes its module name, an initramfs
+generated outside the standard Fedora dracut flow, or a manual driver load
+requires separate review.
 
 ## Rollback
 
@@ -91,7 +118,7 @@ sudo ./rollback.sh
 modinfo -k 7.3.3-300.fc45.x86_64 -n snd_soc_sof_da7219
 ```
 
-The selected path should again point into the packaged `kernel/` subtree. Rollback removes the bundle’s override, regenerates the module index and rebuilds the target initramfs. Reboot without the one-time SOF argument. If you manually edited a persistent DSP setting, restore your original setting and rebuild the target initramfs with `sudo dracut --force --kver 7.3.3-300.fc45.x86_64`. AVS speaker blocking must remain in effect.
+The selected path should again point into the packaged `kernel/` subtree. Rollback removes the bundle’s override, regenerates the module index and rebuilds the target initramfs with the speaker lock still in place. Reboot without the one-time SOF argument. If you manually edited a persistent DSP setting, restore your original setting and rebuild the target initramfs with `sudo dracut --force --kver 7.3.3-300.fc45.x86_64`. Keep the original AVS speaker blacklist in place as well.
 
 ## Speaker protection
 

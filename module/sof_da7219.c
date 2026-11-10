@@ -220,17 +220,9 @@ static struct snd_soc_dai_link_component da7219_component[] = {
 	}
 };
 
-static int bxt_speaker_init(struct snd_soc_pcm_runtime *rtd)
-{
-	struct snd_soc_dai *dai = snd_soc_rtd_to_codec(rtd, 0);
-
-	return snd_soc_dapm_disable_pin(snd_soc_component_to_dapm(dai->component),
-					"Speaker");
-}
-
 static int bxt_speaker_startup(struct snd_pcm_substream *substream)
 {
-	/* The APL topology has volume control but lacks speaker protection. */
+	/* Refuse to start SSP5 even when the topology exposes a speaker PCM. */
 	return -EPERM;
 }
 
@@ -270,11 +262,14 @@ sof_card_dai_links_create(struct device *dev, struct snd_soc_card *card,
 	/* codec-specific fields for speaker amplifier */
 	switch (ctx->amp_type) {
 	case CODEC_MAX98357A:
-		max_98357a_dai_link(ctx->amp_link);
 		if (bxt) {
-			/* Keep SSP5 present for topology binding, with playback blocked. */
-			ctx->amp_link->init = bxt_speaker_init;
+			/* Preserve the topology backend without binding the amp. */
+			ctx->amp_link->codecs = &snd_soc_dummy_dlc;
+			ctx->amp_link->num_codecs = 1;
+			ctx->amp_link->playback_only = 1;
 			ctx->amp_link->ops = &bxt_speaker_ops;
+		} else {
+			max_98357a_dai_link(ctx->amp_link);
 		}
 		break;
 	case CODEC_MAX98360A:
@@ -556,6 +551,6 @@ MODULE_DESCRIPTION("ASoC Intel(R) SOF Machine driver for Dialog codec");
 MODULE_AUTHOR("Yong Zhi <yong.zhi@intel.com>");
 MODULE_AUTHOR("Brent Lu <brent.lu@intel.com>");
 MODULE_LICENSE("GPL v2");
-MODULE_INFO(babytiger_speaker_lock, "1");
+MODULE_INFO(babytiger_speaker_lock, "2");
 MODULE_IMPORT_NS("SND_SOC_INTEL_SOF_BOARD_HELPERS");
 MODULE_IMPORT_NS("SND_SOC_INTEL_SOF_MAXIM_COMMON");
