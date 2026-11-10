@@ -60,7 +60,7 @@ For an in-tree build, apply `0001-asoc-intel-sof-da7219-babytiger.patch` with `g
    modprobe -c | grep -E 'dsp_driver|avs.*max98357'
    ```
 
-2. Keep the AVS speaker blacklist in place. Check for an existing forced DSP setting in the boot arguments, modprobe files and initramfs. To test SOF, use `snd_intel_dspcfg.dsp_driver=3` in a **one-time GRUB edit** for the target boot entry. If a persistent setting forces AVS, record it and resolve the conflict before the SOF test. For a persistent modprobe configuration change, rebuild the target initramfs and restore the original setting during rollback. Leave the installed UCM files and firmware in place. The port expects the stock `sof-apl.ri` and `sof-apl-da7219.tplg` paths and no custom topology override.
+2. Keep the AVS speaker blacklist in place. To test SOF, use `snd_intel_dspcfg.dsp_driver=3` in a **one-time GRUB edit** for the target boot entry. Replace any existing `snd_intel_dspcfg.dsp_driver` argument in that entry. Fedora's kmod 34.2 appends the boot argument after any `options snd_intel_dspcfg dsp_driver=4` setting from modprobe.d, so the temporary boot uses SOF. The port expects the stock `sof-apl.ri` and `sof-apl-da7219.tplg` files and the installed UCM files. [Fedora kmod package](https://packages.fedoraproject.org/pkgs/kmod/kmod/fedora-45.html) · [kmod 34.2 configuration parser](https://github.com/kmod-project/kmod/blob/v34.2/libkmod/libkmod-config.c)
 3. With Secure Boot or module signature enforcement, sign the built module using the target development tree’s `scripts/sign-file` and a key trusted by the running kernel. For example, from this bundle directory run `/usr/lib/modules/7.3.3-300.fc45.x86_64/build/scripts/sign-file sha256 /path/to/private-key /path/to/certificate.der module/snd-soc-sof_da7219.ko`. Check that the certificate is enrolled and confirm the signer with `modinfo -F signer`. The module produced by `make` is unsigned.
 4. Install by hand from this bundle. The installer checks the release, board, live NHLT endpoint directions, ACPI device presence, and module metadata. It stages the override under `updates/babytiger`, runs `depmod`, and rebuilds the target’s standard Fedora initramfs via `dracut`. It preserves the packaged module and uses the existing Fedora boot entry. The script does not load or unload any modules or reboot.
 
@@ -73,6 +73,7 @@ For an in-tree build, apply `0001-asoc-intel-sof-da7219-babytiger.patch` with `g
 
    ```sh
    lspci -nnk -d 8086:5a98
+   cat /sys/module/snd_intel_dspcfg/parameters/dsp_driver
    journalctl -k -b | grep -Ei 'sof|da7219|NHLT|98357'
    ls -l /sys/bus/platform/devices/bxt_da7219_mx98357a*/driver
    aplay -l

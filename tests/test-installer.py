@@ -72,6 +72,7 @@ dracut() { if [[ $FAIL == 1 ]]; then return 1; fi; printf rebuilt > "$1"; }
                                      "OVERRIDE": str(override), "STOCK": str(module_root / "kernel/stock.ko"),
                                      "FAIL": fail}, capture_output=True, text=True)
         assert result.returncode == expected, result.stdout + result.stderr
+        return result.stdout
 
     nhlt.write_bytes(make_nhlt(2))
     run("install", 1)
@@ -83,12 +84,12 @@ dracut() { if [[ $FAIL == 1 ]]; then return 1; fi; printf rebuilt > "$1"; }
     nhlt.write_bytes(make_nhlt(5))
     run("install", 1, fail="1")
     assert not override.exists() and image.read_text() == "original"
-    run("install", 0)
+    assert "snd_intel_dspcfg.dsp_driver=3" in run("install", 0)
     assert override.exists() and image.read_text() == "rebuilt"
     run("install", 1)
     run("rollback", 1, fail="1")
     assert override.exists() and image.read_text() == "rebuilt"
-    run("rollback", 0)
+    assert "snd_intel_dspcfg.dsp_driver=3" not in run("rollback", 0)
     assert not override.exists()
     run("rollback", 0)
     print("Scratch fixture checks passed for NHLT rejection, install, rollback, and dracut failure recovery.")

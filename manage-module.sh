@@ -129,3 +129,7 @@ mv -fT -- "$stage/initramfs.img" "$image"
 changed=0
 
 printf 'Selected module for the next boot: %s\n' "$selected"
+if [[ $action == install ]]; then
+    printf '%s\n' 'For the SOF test boot, set snd_intel_dspcfg.dsp_driver=3 in the temporary GRUB editor.'
+    printf '%s\n' 'Replace any existing snd_intel_dspcfg.dsp_driver argument in that boot entry.'
+fi
