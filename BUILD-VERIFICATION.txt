@@ -1,0 +1,70 @@
+BABYTIGER SOF machine driver build verification
+10 November 2026
+
+Target
+  Fedora 45 x86_64, kernel 7.3.3-300.fc45.x86_64.
+  Build host ran Fedora 44 with 7.2.15-200.fc44.x86_64.
+  The build used extracted Fedora 45 kernel-devel files and Module.symvers.
+  No host kernel package or module was installed.
+
+Inputs
+  SNAPPY baseline cloned at 96afec1c27f86c078f7c1031b4980f81f54d0032.
+  Fedora kernel-7.3.3-300.fc45.src.rpm, linux-7.3.3.tar.xz and
+  patch-7.3-redhat.patch. The SRPM's optional linux-kernel-test.patch was empty.
+  Fedora kernel-devel-7.3.3-300.fc45.x86_64.rpm and kernel-core of the same release.
+  Signed Fedora mirror RPMs verified against Fedora 45 key fingerprint
+  4F50 A611 4CD5 C697 6A7F 1179 655A 4B02 F577 861E.
+  The signed and Koji copies of the source and devel RPMs had identical file
+  manifests, including the individual file digests.
+  GCC 16.2.1 20261029 (Red Hat 16.2.1-3), matching kernel-devel's CC_VERSION_TEXT.
+  pahole v1.32; matching BTF base extracted from the signed Fedora vmlinuz.
+
+Build
+  The original SNAPPY module failed against this kernel-devel with DAPM type
+  errors, obsolete sof_dai_link_ops and unquoted MODULE_IMPORT_NS values.
+  The first port build caught the renamed component-to-DAPM accessor.
+  Rebuilding with snd_soc_component_to_dapm() resolved it.
+
+  Command: make KDIR=/path/to/usr/src/kernels/7.3.3-300.fc45.x86_64 W=1
+  CC [M]  sof_da7219.o
+  LD [M]  snd-soc-sof_da7219.o
+  MODPOST Module.symvers
+  CC [M]  snd-soc-sof_da7219.mod.o
+  CC [M]  .module-common.o
+  LD [M]  snd-soc-sof_da7219.ko
+  BTF [M] snd-soc-sof_da7219.ko
+
+  modinfo name: snd_soc_sof_da7219
+  modinfo vermagic: 7.3.3-300.fc45.x86_64 SMP preempt mod_unload
+  modinfo new alias: platform:bxt_da7219_mx98357a
+  modinfo lock marker: babytiger_speaker_lock=1
+  modinfo namespace imports: SND_SOC_INTEL_SOF_BOARD_HELPERS,
+    SND_SOC_INTEL_SOF_MAXIM_COMMON
+  readelf: .BTF and .BTF.base present
+  SHA-256 of this unsigned build (debug paths can vary):
+    80564e78050cdcd8bca7751f4c3bb26320fce6f16b144b0629a1505b4e88162b
+
+Offline checks
+  Patch applied cleanly to the Fedora baseline. The external source matched
+  the in-tree result except for the local DA7219 header include.
+  checkpatch.pl --no-tree --no-signoff: 0 errors, 0 warnings.
+  The Makefile rejected the host's 7.2.15-200.fc44.x86_64 development tree.
+  In an isolated module tree extracted from signed Fedora RPMs, depmod and
+  modinfo selected the override under updates/babytiger. modprobe
+  --show-depends resolved the BXT alias and its dependencies without loading
+  anything. After removing the override and re-running depmod, modinfo again
+  selected the stock .ko.xz.
+  Bash syntax checks passed for all scripts. A scratch fixture with mocked
+  Fedora, depmod and dracut verified wrong NHLT routes and checksum rejection,
+  install, duplicate install rejection, rollback, repeat rollback and
+  recovery when dracut fails. No real initramfs was changed or regenerated.
+  Fedora 45 alsa-sof-firmware-2026.09.2-1.fc45.noarch passed signature checks.
+  Decompressed SHA-256 values for the firmware and the topology inspected:
+    sof-apl.ri           d63499833bb20352e63907e2409f8246df278a15cf7c73a24aeefaff19fb1a43
+    sof-apl-da7219.tplg  7e313f5e692494dc9bff62de18793736cea4ba45badca9716426f695b853093f
+
+Untested
+  Real module insertion, Secure Boot acceptance, initramfs boot, firmware
+  boot and card registration, jack and headset audio, DMIC capture, HDMI,
+  power management and amplifier shutdown behavior on the CX1500CNA.
+  No speaker playback or hardware validation was performed.

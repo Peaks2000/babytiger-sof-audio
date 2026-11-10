@@ -1,0 +1,72 @@
+Fedora stock SOF topology patch verification
+10 November 2026
+
+Inputs
+  Signed Fedora alsa-sof-firmware-2026.09.2-1.fc45.noarch RPM.
+  Stock sof-apl-da7219.tplg SHA-256
+    7e313f5e692494dc9bff62de18793736cea4ba45badca9716426f695b853093f
+  Stock sof-apl.ri SHA-256
+    d63499833bb20352e63907e2409f8246df278a15cf7c73a24aeefaff19fb1a43
+  The firmware matches upstream sof-bin/v2.2.x/sof-v2.2/intel-signed/sof-apl.ri.
+  Source commit SOF v2.2, 57864296b07c5ffd673214dd5b1e3d07ee274a22.
+  The IIR EQ UUID is present in the shipped firmware at byte offset 262368.
+  The DRC and multiband DRC UUIDs from that source are absent.
+  This patch uses the built-in IIR component.
+
+Topology build
+  GNU m4 and libatopology.so.2 from alsa-lib-1.2.16.1-1.fc44.
+  Rebuilt stock source matches all Fedora binary blocks except its manifest.
+  The builder patches the source, compiles it, verifies the speaker graph,
+  and transplants only the speaker widget and route blocks into Fedora's
+  original binary, updating its manifest element counts.
+  All PCM capabilities, all SSP/DMIC/HDA backend hardware configurations,
+  all non-speaker widgets and all non-speaker routes remain byte-identical
+  to the input. The firmware image is used as shipped.
+  The IIR blob has one shared response assigned to both channels.
+  The compiled coefficient control exposes read access only, with no
+  TLV write access. Fedora's ASoC binding requires get and put handler IDs
+  even for a read-only ordinary bytes control. ALSA access flags prohibit
+  a userspace write to this control.
+  ALSA decode succeeded with the read-only ordinary bytes control.
+  A read-only TLV variant exposed an ALSA decoder limitation and was
+  replaced with an ordinary bytes control.
+
+Speaker graph
+  PCM0P -> BUF1.0 -> PGA1.0 -> BUF1.2 -> EQIIR1.0 -> BUF1.1 -> SSP5.OUT
+  The IIR receives S32 data and supplies the stock S16 SSP5 backend.
+  All graph edges are checked, and all other route blocks are checked
+  for an unexpected path into SSP5 or the fixed IIR.
+
+Filter
+  Two-channel, 48 kHz, second-order Butterworth high-pass at 180 Hz.
+  Q2.30 a2,a1,b2,b1,b0
+    -1038552543, 2111708058, 43092658, -86185316, 43092658
+  Output shift 0, Q2.14 output gain 16384.
+  Numerator attenuation is applied before the feedback loop.
+  Nyquist passband gain -27.79 dB.
+  Quantized linear impulse-response L1 bound 0.09800000, -20.18 dBFS.
+  The calculation includes a geometric envelope bound on the residual tail.
+  This is a digital signal bound. It is not a calibrated speaker power limit.
+
+Host algorithm check
+  Compiled the exact SOF v2.2 generic iir_df2t implementation with GCC,
+  upstream state/coefficient definitions, and host saturation helpers.
+  Compiler options -O2 -Wall -Wextra -Werror -Wno-sign-compare.
+  The last option accommodates upstream signed loop counters.
+  The check exercises SOF's generic S32-to-S16 wrapper.
+  The DSP's HiFi3 implementation was inspected but was not executed.
+positive DC: peak 1315/32768, -27.930 dBFS
+negative DC: peak 1315/32768, -27.930 dBFS
+alternating full scale: peak 1359/32768, -27.645 dBFS
+random full scale: peak 2145/32768, -23.680 dBFS
+adversarial impulse-sign sequence: peak 3211/32768, -20.176 dBFS
+sine 20 Hz: peak 67/32768, -53.788 dBFS
+sine 180 Hz: peak 946/32768, -30.791 dBFS
+sine 1000 Hz: peak 1496/32768, -26.810 dBFS
+sine 10000 Hz: peak 1357/32768, -27.657 dBFS
+
+Untested
+  No real DSP topology load, audio playback, GPIO transition, analog output
+  measurement, temperature or excursion measurement, or Chromebook hardware
+  validation has occurred. CPU usage and scheduling margins on the actual
+  Apollo Lake DSP remain unmeasured.

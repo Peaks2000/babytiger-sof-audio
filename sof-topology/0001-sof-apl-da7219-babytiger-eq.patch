@@ -1,0 +1,80 @@
+--- a/sof-apl-da7219.m4
++++ b/sof-apl-da7219.m4
+@@ -22,7 +22,7 @@
+ #
+ # Define the pipelines
+ #
+-# PCM0  ----> volume (pipe 1)   -----> SSP5 (speaker - maxim98357a, BE link 0)
++# PCM0  ----> volume + fixed IIR (pipe 1) ----> SSP5 (MAX98357A, BE link 0)
+ # PCM1  <---> volume (pipe 2,3) <----> SSP1 (headset - da7219, BE link 1)
+ # PCM99 <---- DMIC0 (dmic capture, BE link 2)
+ # PCM5  ----> volume (pipe 5)   -----> iDisp1 (HDMI/DP playback, BE link 3)
+@@ -38,10 +38,12 @@
+ 
+ # Low Latency playback pipeline 1 on PCM 0 using max 2 channels of s32le.
+ # 1000us deadline with priority 0 on core 0
++define(`BABYTIGER_SSP5', `1')
+ PIPELINE_PCM_ADD(sof/pipe-volume-playback.m4,
+ 	1, 0, 2, s32le,
+ 	1000, 0, 0,
+ 	48000, 48000, 48000)
++undefine(`BABYTIGER_SSP5')
+ 
+ # Low Latency playback pipeline 2 on PCM 1 using max 2 channels of s32le.
+ # 1000us deadline with priority 0 on core 0
+--- a/sof/pipe-volume-playback.m4
++++ b/sof/pipe-volume-playback.m4
+@@ -50,6 +50,31 @@
+ W_PGA(0, PIPELINE_FORMAT, DAI_PERIODS, 2, DEF_PGA_CONF, SCHEDULE_CORE,
+ 	LIST(`		', "PIPELINE_ID Master Playback Volume"))
+ 
++ifdef(`BABYTIGER_SSP5', `
++include(`eq_iir.m4')
++
++define(`BABYTIGER_EQ_CTL', `BABYTIGER SSP5 fixed EQ')
++include(`babytiger-eq-coefficients.m4')
++SectionControlBytes."BABYTIGER_EQ_CTL" {
++	index "PIPELINE_ID"
++	max "256"
++	ops."ctl" {
++		info "bytes"
++		get "258"
++		put "258"
++	}
++	access [ "read" ]
++	data [ "babytiger_eq_data" ]
++}
++W_EQ_IIR(0, PIPELINE_FORMAT, 2, DAI_PERIODS, SCHEDULE_CORE,
++	LIST(`		', "BABYTIGER_EQ_CTL"))
++undefine(`BABYTIGER_EQ_CTL')
++
++W_BUFFER(2, COMP_BUFFER_SIZE(2,
++	COMP_SAMPLE_SIZE(PIPELINE_FORMAT), PIPELINE_CHANNELS, COMP_PERIOD_FRAMES(PCM_MAX_RATE, SCHEDULE_PERIOD)),
++	PLATFORM_HOST_MEM_CAP, SCHEDULE_CORE)
++')
++
+ # Playback Buffers
+ W_BUFFER(0, COMP_BUFFER_SIZE(2,
+ 	COMP_SAMPLE_SIZE(PIPELINE_FORMAT), PIPELINE_CHANNELS, COMP_PERIOD_FRAMES(PCM_MAX_RATE, SCHEDULE_PERIOD)),
+@@ -63,11 +88,21 @@
+ #
+ #  host PCM_P --> B0 --> Volume 0 --> B1 --> sink DAI0
+ 
++ifdef(`BABYTIGER_SSP5', `
++P_GRAPH(pipe-volume-playback, PIPELINE_ID,
++	LIST(`		',
++	`dapm(N_BUFFER(0), N_PCMP(PCM_ID))',
++	`dapm(N_PGA(0), N_BUFFER(0))',
++	`dapm(N_BUFFER(2), N_PGA(0))',
++	`dapm(N_EQ_IIR(0), N_BUFFER(2))',
++	`dapm(N_BUFFER(1), N_EQ_IIR(0))'))
++', `
+ P_GRAPH(pipe-volume-playback, PIPELINE_ID,
+ 	LIST(`		',
+ 	`dapm(N_BUFFER(0), N_PCMP(PCM_ID))',
+ 	`dapm(N_PGA(0), N_BUFFER(0))',
+ 	`dapm(N_BUFFER(1), N_PGA(0))'))
++')
+ 
+ #
+ # Pipeline Source and Sinks

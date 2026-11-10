@@ -1,0 +1,241 @@
+diff --git a/sound/soc/intel/boards/sof_da7219.c b/sound/soc/intel/boards/sof_da7219.c
+index ad845d3..6f456b9 100644
+--- a/sound/soc/intel/boards/sof_da7219.c
++++ b/sound/soc/intel/boards/sof_da7219.c
+@@ -5,6 +5,7 @@
+  * Intel SOF Machine driver for Dialog headphone codec
+  */
+ 
++#include <linux/dmi.h>
+ #include <linux/input.h>
+ #include <linux/module.h>
+ #include <sound/jack.h>
+@@ -23,6 +24,10 @@
+ #define SOF_DA7219_CML_BOARD			BIT(1)
+ #define SOF_DA7219_JSL_BOARD			BIT(2)
+ #define SOF_DA7219_MCLK_EN			BIT(3)
++#define SOF_DA7219_BXT_BOARD			BIT(4)
++
++#define BXT_SSP_CODEC	1
++#define BXT_SSP_AMP	5
+ 
+ #define DIALOG_CODEC_DAI	"da7219-hifi"
+ 
+@@ -195,7 +200,7 @@ static int card_late_probe(struct snd_soc_card *card)
+ 	return sof_intel_board_card_late_probe(card);
+ }
+ 
+-static struct snd_soc_card card_da7219 = {
++static const struct snd_soc_card card_da7219 = {
+ 	.name = "da7219", /* the sof- prefix is added by the core */
+ 	.owner = THIS_MODULE,
+ 	.controls = controls,
+@@ -215,9 +220,27 @@ static struct snd_soc_dai_link_component da7219_component[] = {
+ 	}
+ };
+ 
++static int bxt_speaker_init(struct snd_soc_pcm_runtime *rtd)
++{
++	struct snd_soc_dai *dai = snd_soc_rtd_to_codec(rtd, 0);
++
++	return snd_soc_dapm_disable_pin(snd_soc_component_to_dapm(dai->component),
++					"Speaker");
++}
++
++static int bxt_speaker_startup(struct snd_pcm_substream *substream)
++{
++	/* The APL topology has volume control but lacks speaker protection. */
++	return -EPERM;
++}
++
++static const struct snd_soc_ops bxt_speaker_ops = {
++	.startup = bxt_speaker_startup,
++};
++
+ static int
+ sof_card_dai_links_create(struct device *dev, struct snd_soc_card *card,
+-			  struct sof_card_private *ctx)
++			  struct sof_card_private *ctx, bool bxt)
+ {
+ 	int ret;
+ 
+@@ -248,6 +271,11 @@ sof_card_dai_links_create(struct device *dev, struct snd_soc_card *card,
+ 	switch (ctx->amp_type) {
+ 	case CODEC_MAX98357A:
+ 		max_98357a_dai_link(ctx->amp_link);
++		if (bxt) {
++			/* Keep SSP5 present for topology binding, with playback blocked. */
++			ctx->amp_link->init = bxt_speaker_init;
++			ctx->amp_link->ops = &bxt_speaker_ops;
++		}
+ 		break;
+ 	case CODEC_MAX98360A:
+ 		max_98360a_dai_link(ctx->amp_link);
+@@ -290,12 +318,26 @@ sof_card_dai_links_create(struct device *dev, struct snd_soc_card *card,
+ 					SOF_LINK_NONE,       \
+ 					SOF_LINK_NONE)
+ 
++static bool is_babytiger(void)
++{
++	if (!dmi_match(DMI_SYS_VENDOR, "Google"))
++		return false;
++
++	return dmi_match(DMI_PRODUCT_NAME, "Babytiger") ||
++	       dmi_match(DMI_BOARD_NAME, "Babytiger") ||
++	       (dmi_match(DMI_BOARD_NAME, "Coral") &&
++		(dmi_match(DMI_PRODUCT_SKU, "sku30") ||
++		 dmi_match(DMI_PRODUCT_SKU, "sku33")));
++}
++
+ static int audio_probe(struct platform_device *pdev)
+ {
+ 	struct snd_soc_acpi_mach *mach = pdev->dev.platform_data;
+ 	struct sof_card_private *ctx;
++	struct snd_soc_card *card;
+ 	char *card_name;
+ 	unsigned long board_quirk = 0;
++	bool bxt;
+ 	int ret;
+ 
+ 	if (pdev->id_entry && pdev->id_entry->driver_data)
+@@ -303,6 +345,19 @@ static int audio_probe(struct platform_device *pdev)
+ 
+ 	dev_dbg(&pdev->dev, "board_quirk = %lx\n", board_quirk);
+ 
++	bxt = board_quirk & SOF_DA7219_BXT_BOARD;
++	if (bxt && !is_babytiger())
++		return -ENODEV;
++
++	if (bxt && mach->mach_params.i2s_link_mask != (BIT(BXT_SSP_CODEC) | BIT(BXT_SSP_AMP)))
++		return dev_err_probe(&pdev->dev, -ENODEV,
++				     "unexpected BABYTIGER NHLT I2S mask %#x\n",
++				     mach->mach_params.i2s_link_mask);
++
++	card = devm_kmemdup(&pdev->dev, &card_da7219, sizeof(*card), GFP_KERNEL);
++	if (!card)
++		return -ENOMEM;
++
+ 	/* initialize ctx with board quirk */
+ 	ctx = sof_intel_board_get_ctx(&pdev->dev, board_quirk);
+ 	if (!ctx)
+@@ -311,7 +366,16 @@ static int audio_probe(struct platform_device *pdev)
+ 	if (mach->mach_params.codec_mask & IDISP_CODEC_MASK)
+ 		ctx->hdmi.idisp_codec = true;
+ 
+-	if (board_quirk & SOF_DA7219_GLK_BOARD) {
++	if (bxt) {
++		if (ctx->codec_type != CODEC_DA7219 || ctx->amp_type != CODEC_MAX98357A)
++			return dev_err_probe(&pdev->dev, -ENODEV,
++					     "expected DA7219 and MAX98357A on BABYTIGER\n");
++
++		/* sof-apl-da7219.tplg: SSP5, SSP1, dmic01, then iDisp. */
++		ctx->dmic_be_num = 1;
++		ctx->link_order_overwrite = GLK_LINK_ORDER;
++		card->name = "bxtda7219max";
++	} else if (board_quirk & SOF_DA7219_GLK_BOARD) {
+ 		/* dmic16k not support */
+ 		ctx->dmic_be_num = 1;
+ 
+@@ -326,7 +390,7 @@ static int audio_probe(struct platform_device *pdev)
+ 			if (!card_name)
+ 				return -ENOMEM;
+ 
+-			card_da7219.name = card_name;
++			card->name = card_name;
+ 			break;
+ 		default:
+ 			break;
+@@ -343,7 +407,7 @@ static int audio_probe(struct platform_device *pdev)
+ 			if (!card_name)
+ 				return -ENOMEM;
+ 
+-			card_da7219.name = card_name;
++			card->name = card_name;
+ 			break;
+ 		case CODEC_MAX98390:
+ 			card_name = devm_kstrdup(&pdev->dev,
+@@ -352,7 +416,7 @@ static int audio_probe(struct platform_device *pdev)
+ 			if (!card_name)
+ 				return -ENOMEM;
+ 
+-			card_da7219.name = card_name;
++			card->name = card_name;
+ 			break;
+ 		default:
+ 			break;
+@@ -369,7 +433,7 @@ static int audio_probe(struct platform_device *pdev)
+ 			if (!card_name)
+ 				return -ENOMEM;
+ 
+-			card_da7219.name = card_name;
++			card->name = card_name;
+ 			break;
+ 		case CODEC_MAX98373:
+ 			card_name = devm_kstrdup(&pdev->dev, "da7219max",
+@@ -377,7 +441,7 @@ static int audio_probe(struct platform_device *pdev)
+ 			if (!card_name)
+ 				return -ENOMEM;
+ 
+-			card_da7219.name = card_name;
++			card->name = card_name;
+ 			break;
+ 		default:
+ 			break;
+@@ -388,17 +452,17 @@ static int audio_probe(struct platform_device *pdev)
+ 		ctx->da7219.mclk_en = true;
+ 
+ 	/* update dai_link */
+-	ret = sof_card_dai_links_create(&pdev->dev, &card_da7219, ctx);
++	ret = sof_card_dai_links_create(&pdev->dev, card, ctx, bxt);
+ 	if (ret)
+ 		return ret;
+ 
+ 	/* update codec_conf */
+ 	switch (ctx->amp_type) {
+ 	case CODEC_MAX98373:
+-		max_98373_set_codec_conf(&card_da7219);
++		max_98373_set_codec_conf(card);
+ 		break;
+ 	case CODEC_MAX98390:
+-		max_98390_set_codec_conf(&pdev->dev, &card_da7219);
++		max_98390_set_codec_conf(&pdev->dev, card);
+ 		break;
+ 	case CODEC_MAX98357A:
+ 	case CODEC_MAX98360A:
+@@ -410,19 +474,25 @@ static int audio_probe(struct platform_device *pdev)
+ 		return -EINVAL;
+ 	}
+ 
+-	card_da7219.dev = &pdev->dev;
++	card->dev = &pdev->dev;
+ 
+-	ret = snd_soc_fixup_dai_links_platform_name(&card_da7219,
++	ret = snd_soc_fixup_dai_links_platform_name(card,
+ 						    mach->mach_params.platform);
+ 	if (ret)
+ 		return ret;
+ 
+-	snd_soc_card_set_drvdata(&card_da7219, ctx);
++	snd_soc_card_set_drvdata(card, ctx);
+ 
+-	return devm_snd_soc_register_card(&pdev->dev, &card_da7219);
++	return devm_snd_soc_register_card(&pdev->dev, card);
+ }
+ 
+ static const struct platform_device_id board_ids[] = {
++	{
++		.name = "bxt_da7219_mx98357a",
++		.driver_data = SOF_DA7219_BXT_BOARD |
++			       SOF_SSP_PORT_CODEC(BXT_SSP_CODEC) |
++			       SOF_SSP_PORT_AMP(BXT_SSP_AMP),
++	},
+ 	{
+ 		.name = "glk_da7219_def",
+ 		.driver_data = (kernel_ulong_t)(SOF_DA7219_GLK_BOARD |
+@@ -486,5 +556,6 @@ MODULE_DESCRIPTION("ASoC Intel(R) SOF Machine driver for Dialog codec");
+ MODULE_AUTHOR("Yong Zhi <yong.zhi@intel.com>");
+ MODULE_AUTHOR("Brent Lu <brent.lu@intel.com>");
+ MODULE_LICENSE("GPL v2");
++MODULE_INFO(babytiger_speaker_lock, "1");
+ MODULE_IMPORT_NS("SND_SOC_INTEL_SOF_BOARD_HELPERS");
+ MODULE_IMPORT_NS("SND_SOC_INTEL_SOF_MAXIM_COMMON");
